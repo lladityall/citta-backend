@@ -4,12 +4,21 @@ const mysql = require('mysql2/promise');
 const nodemailer = require('nodemailer');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs'); // Added for directory management
 // Dynamic import for node-fetch to support CommonJS
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 require('dotenv').config();
 
 const app = express();
+// Use dynamic PORT for hosting services like Render
 const PORT = process.env.PORT || 5000;
+
+// 0. Ensure 'uploads' directory exists
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+  console.log('📁 Created missing uploads directory');
+}
 
 // 1. Configure Multer for Photo Uploads
 const storage = multer.diskStorage({
@@ -92,6 +101,7 @@ app.post('/chat', async (req, res) => {
     const data = await response.json();
     res.json({ reply: data.message.content });
   } catch (error) {
+    console.error("AI API Error:", error.message);
     res.status(500).json({ reply: "I'm having trouble connecting to my systems." });
   }
 });
@@ -123,9 +133,9 @@ async function initDB() {
       )
     `);
     conn.release();
-    console.log('✅ Database & AI Chat Ready');
+    console.log('✅ Database synchronized');
   } catch (err) {
-    console.error('⚠️ Database Error:', err.message);
+    console.error('❌ Database Initialization Error:', err.message);
   }
 }
 
@@ -135,7 +145,7 @@ app.post('/api/contact', upload.single('photo'), async (req, res) => {
   const photoPath = req.file ? req.file.path : null;
 
   try {
-    // 1. SAVE TO DATABASE (This is fast)
+    // 1. SAVE TO DATABASE (Fast operation)
     await pool.execute(
       `INSERT INTO professional_submissions 
       (full_name, designation, organization, location, email_mobile, advisory_role, expertise, short_bio, experience, previous_roles, achievements, education, certifications, links, photo_path, consent)
@@ -149,10 +159,9 @@ app.post('/api/contact', upload.single('photo'), async (req, res) => {
     );
 
     // 2. RESPOND TO USER IMMEDIATELY
-    // The browser sees "Success" right now, while the email sends in the background.
     res.status(201).json({ message: 'Submission successful' });
 
-    // 3. SEND EMAIL NOTIFICATION (Background process)
+    // 3. SEND EMAIL NOTIFICATION (Background process - no await)
     const mailOptions = {
       from: `"${data.fullName}" <${process.env.SMTP_USER}>`,
       to: process.env.RECEIVER_EMAIL,
@@ -165,31 +174,24 @@ app.post('/api/contact', upload.single('photo'), async (req, res) => {
           <p><strong>Location:</strong> ${data.location}</p>
           <p><strong>Contact Info:</strong> ${data.emailMobile}</p>
           <hr/>
-          <h4>Professional Bio</h4>
-          <p>${data.shortBio}</p>
-          <h4>Expertise</h4>
-          <p>${data.expertise}</p>
-          <h4>Education</h4>
-          <p>${data.education}</p>
-          <p><em>Full details are stored in the database.</em></p>
+          <p><em>Full details are available in the database.</em></p>
         </div>
       `,
       attachments: req.file ? [{ filename: req.file.originalname, path: req.file.path }] : []
     };
 
-    // We do NOT use 'await' here so the server doesn't wait for the email provider.
-    transporter.sendMail(mailOptions).catch(err => console.error("Background Email Error:", err));
+    transporter.sendMail(mailOptions).catch(err => console.error("📧 Background Email Error:", err));
 
   } catch (err) {
-    console.error("Submission Error:", err);
-    // Check if headers were already sent to prevent app crash
+    console.error("❌ Submission Error:", err.message);
     if (!res.headersSent) {
       res.status(500).json({ message: 'Internal Server Error' });
     }
   }
 });
 
-app.listen(PORT, async () => {
-  console.log(`🚀 Server on http://localhost:${PORT}`);
+// Start Server with IP Binding for Cloud Hosting
+app.listen(PORT, '0.0.0.0', async () => {
+  console.log(`🚀 CITTA Server is live on port ${PORT}`);
   await initDB();
 });
